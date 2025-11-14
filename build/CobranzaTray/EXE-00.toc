@@ -76,7 +76,7 @@
  [],
  False,
  False,
- 1762960919,
+ 1763129484,
  [('runw.exe',
    'C:\\Users\\ccordova\\Desktop\\PROYECTO\\PROJECT\\cobranza_xls_app-react\\.venv\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',
    'EXECUTABLE')],
