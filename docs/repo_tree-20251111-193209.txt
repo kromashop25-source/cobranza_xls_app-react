@@ -1,0 +1,57 @@
+cobranza_xls_app-react
+├── backend
+│   ├── app
+│   │   ├── data
+│   │   │   └── COBRANZA-formateado.XLS
+│   │   ├── routers
+│   │   │   └── pdf.py
+│   │   ├── services
+│   │   │   ├── excel_copy.py
+│   │   │   └── pdf_export_service.py
+│   │   ├── static
+│   │   │   ├── app.js
+│   │   │   ├── index.html
+│   │   │   └── styles.css
+│   │   ├── __init__.py
+│   │   └── main.py
+│   └── static
+│       ├── app.js
+│       ├── index.html
+│       └── styles.css
+├── frontend
+│   ├── public
+│   │   └── vite.svg
+│   ├── src
+│   │   ├── api
+│   │   │   └── client.ts
+│   │   ├── assets
+│   │   │   └── react.svg
+│   │   ├── components
+│   │   │   ├── FileField.tsx
+│   │   │   ├── ProgressBar.tsx
+│   │   │   └── StatusLine.tsx
+│   │   ├── pages
+│   │   │   └── MergePage.tsx
+│   │   ├── App.css
+│   │   ├── App.tsx
+│   │   ├── index.css
+│   │   └── main.tsx
+│   ├── .gitignore
+│   ├── eslint.config.js
+│   ├── index.html
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── README.md
+│   ├── tsconfig.app.json
+│   ├── tsconfig.json
+│   ├── tsconfig.node.json
+│   └── vite.config.ts
+├── scripts
+│   └── print_repo_tree.py
+├── CobranzaApp.spec
+├── ESTRUCTURA.txt
+├── make_exe.bat
+├── pdf_export.log
+├── PDF_EXPORT_README.md
+├── requirements.txt
+└── run_app.py

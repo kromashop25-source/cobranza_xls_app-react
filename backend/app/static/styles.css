@@ -1,0 +1,80 @@
+﻿:root { --bg:#0f172a; --card:#111827; --txt:#e5e7eb; --muted:#9ca3af; --accent:#60a5fa; --err:#f87171; }
+*{ box-sizing:border-box; }
+body{ margin:0; font-family:Inter,system-ui,Segoe UI,Arial; color:var(--txt); background:linear-gradient(180deg,#0b1020,#0f172a); }
+.container{ max-width:840px; margin:48px auto; padding:24px; background:var(--card); border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.4); }
+h1{ margin:0 0 12px; font-size:24px; }
+.note{ color:var(--muted); margin:0 0 24px; }
+.field{ margin-bottom:16px; display:flex; flex-direction:column; gap:6px; }
+label{ font-weight:600; }
+input[type=file]{ padding:12px; border:1px solid #1f2937; border-radius:10px; background:#0b1222; color:var(--muted); }
+button{ appearance:none; border:0; background:var(--accent); color:#0b1222; padding:12px 16px; border-radius:12px; font-weight:700; cursor:pointer; }
+button:hover{ filter:brightness(1.05); }
+.status{ margin-top:16px; padding:12px; border-radius:10px; background:#0b1222; color:var(--muted); }
+.status.ok{ border:1px solid #1f2937; }
+.status.err{ border:1px solid var(--err); color:var(--err); }
+
+.progress {
+  margin-top: 12px;
+  height: 10px;
+  width: 100%;
+  background: rgba(96,165,250,.18);
+  border: 1px solid rgba(96,165,250,.35);
+  border-radius: 999px;
+  overflow: hidden;
+  box-shadow: 0 6px 16px rgba(0,0,0,.35);
+  transition: opacity .2s ease, transform .2s ease;
+  opacity: 0;
+  transform: translateY(4px);
+}
+.progress.is-hidden { display: none; }
+.progress.show { opacity: 1; transform: translateY(0); }
+
+.progress__bar {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #38bdf8, #818cf8);
+  transition: width .25s ease;
+}
+.progress.progress--error .progress__bar { background: #f87171; }
+
+/* === Toggle "Usar maestro por defecto" + ui mínimos === */
+.form-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.form-switch input[type="checkbox"] {
+  /* nativo, simple y accesible */
+  accent-color: var(--accent);
+  transform: scale(1.1);
+  cursor: pointer;
+}
+
+.form-switch label {
+  cursor: pointer;
+}
+
+.muted {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+/* Cuando el input de archivo esté deshabilitado, que se note */
+input[type="file"]:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+  filter: grayscale(20%);
+}
+
+/* Pequeña mejora de foco accesible */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+
+
+

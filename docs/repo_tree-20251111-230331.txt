@@ -1,0 +1,122 @@
+cobranza_xls_app-react
+├── backend
+│   ├── app
+│   │   ├── data
+│   │   │   └── COBRANZA-formateado.XLS
+│   │   ├── routers
+│   │   │   ├── __init__.py
+│   │   │   └── pdf.py
+│   │   ├── services
+│   │   │   ├── __init__.py
+│   │   │   ├── excel_copy.py
+│   │   │   └── pdf_export_service.py
+│   │   ├── static
+│   │   │   ├── app.js
+│   │   │   ├── index.html
+│   │   │   └── styles.css
+│   │   ├── __init__.py
+│   │   └── main.py
+│   ├── __init__.py
+│   ├── CobranzaApp.spec
+│   ├── ESTRUCTURA.txt
+│   ├── make_exe.bat
+│   ├── pdf_export.log
+│   ├── PDF_EXPORT_README.md
+│   ├── requirements.txt
+│   └── run_app.py
+├── docs
+│   └── repo_tree-20251111-193209.txt
+├── frontend
+│   ├── public
+│   │   ├── adminator
+│   │   │   ├── assets
+│   │   │   │   ├── static
+│   │   │   │   │   ├── fonts
+│   │   │   │   │   │   └── icons
+│   │   │   │   │   │       ├── fontawesome
+│   │   │   │   │   │       │   ├── fontawesome-webfont.eot
+│   │   │   │   │   │       │   ├── fontawesome-webfont.svg
+│   │   │   │   │   │       │   ├── fontawesome-webfont.ttf
+│   │   │   │   │   │       │   ├── fontawesome-webfont.woff
+│   │   │   │   │   │       │   ├── fontawesome-webfont.woff2
+│   │   │   │   │   │       │   └── FontAwesome.otf
+│   │   │   │   │   │       └── themify
+│   │   │   │   │   │           ├── themify.eot
+│   │   │   │   │   │           ├── themify.svg
+│   │   │   │   │   │           ├── themify.ttf
+│   │   │   │   │   │           └── themify.woff
+│   │   │   │   │   └── images
+│   │   │   │   │       ├── datatables
+│   │   │   │   │       │   ├── sort_asc.png
+│   │   │   │   │       │   ├── sort_asc_disabled.png
+│   │   │   │   │       │   ├── sort_both.png
+│   │   │   │   │       │   ├── sort_desc.png
+│   │   │   │   │       │   └── sort_desc_disabled.png
+│   │   │   │   │       ├── 404.png
+│   │   │   │   │       ├── 500.png
+│   │   │   │   │       ├── bg.jpg
+│   │   │   │   │       ├── logo-circle.svg
+│   │   │   │   │       ├── logo-gradient.svg
+│   │   │   │   │       ├── logo-outline.svg
+│   │   │   │   │       ├── logo.png
+│   │   │   │   │       └── logo.svg
+│   │   │   │   ├── fontawesome-webfont.svg
+│   │   │   │   └── themify.svg
+│   │   │   ├── 1e59d2330b4c6deb84b3.ttf
+│   │   │   ├── 20fd1704ea223900efa9.woff2
+│   │   │   ├── 29b39089170885ae2967.woff
+│   │   │   ├── 404.html
+│   │   │   ├── 500.html
+│   │   │   ├── 8b43027f47b20503057d.eot
+│   │   │   ├── 9bad94440d49256265a5.eot
+│   │   │   ├── basic-table.html
+│   │   │   ├── blank.html
+│   │   │   ├── buttons.html
+│   │   │   ├── calendar.html
+│   │   │   ├── charts.html
+│   │   │   ├── chat.html
+│   │   │   ├── compose.html
+│   │   │   ├── datatable.html
+│   │   │   ├── eda8b94308c6f538f04a.ttf
+│   │   │   ├── email.html
+│   │   │   ├── f691f37e57f04c152e23.woff
+│   │   │   ├── forms.html
+│   │   │   ├── google-maps.html
+│   │   │   ├── index.html
+│   │   │   ├── main.js
+│   │   │   ├── main.js.LICENSE.txt
+│   │   │   ├── signin.html
+│   │   │   ├── signup.html
+│   │   │   ├── style.css
+│   │   │   ├── ui.html
+│   │   │   └── vector-maps.html
+│   │   └── vite.svg
+│   ├── src
+│   │   ├── api
+│   │   │   └── client.ts
+│   │   ├── assets
+│   │   │   └── react.svg
+│   │   ├── components
+│   │   │   ├── FileField.tsx
+│   │   │   ├── ProgressBar.tsx
+│   │   │   ├── StatusLine.tsx
+│   │   │   └── ThemeToggle.tsx
+│   │   ├── pages
+│   │   │   ├── MergePage.tsx
+│   │   │   └── PdfExportPage.tsx
+│   │   ├── App.css
+│   │   ├── App.tsx
+│   │   ├── index.css
+│   │   └── main.tsx
+│   ├── .gitignore
+│   ├── eslint.config.js
+│   ├── index.html
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── README.md
+│   ├── tsconfig.app.json
+│   ├── tsconfig.json
+│   ├── tsconfig.node.json
+│   └── vite.config.ts
+└── scripts
+    └── print_repo_tree.py

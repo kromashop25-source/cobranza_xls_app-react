@@ -1,0 +1,68 @@
+﻿<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cobranza XLS Copier</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Copiar XLS con formato (Hoja 1 → Hoja 1)</h1>
+    <p class="note">Requiere Windows con Microsoft Excel instalado. Extensión .XLS antigua.</p>
+
+    <section class="uploader">
+      <div class="field">
+        <label>Origen (.XLS técnico)</label>
+        <input id="src" type="file" accept=".xls" />
+      </div>
+
+      <div class="field">
+        <label>Maestro (.XLS)</label>
+
+        <!-- Toggle para usar el maestro alojado -->
+        <div class="form-switch" style="margin: 6px 0;">
+          <input type="checkbox" id="useDefaultMaster" checked />
+          <label for="useDefaultMaster">
+            Usar maestro por defecto alojado
+            <span id="defaultMasterName" class="muted"></span>
+          </label>
+        </div>
+
+        <!-- Input de archivo: se habilita solo si NO se usa el default -->
+        <input id="mst" type="file" accept=".xls" disabled />
+      </div>
+
+
+      <div class="field">
+        <label>Fecha de encabezado</label>
+        <input id="hdrDate" type="date" />
+        <small class="muted">
+          Se reemplazará la fecha del encabezado (primeras filas de la hoja 1) y luego se eliminarán las primeras 6 filas.
+        </small>
+      </div>
+
+      <button id="go">Copiar a Maestro</button>
+      
+
+      <!-- Mensaje de estado y barra de progreso: ÚNICOS y debajo del botón -->
+      <section id="status" class="status" aria-live="polite"></section>
+      <div id="progress" class="progress is-hidden">
+        <div class="progress__bar"></div>
+      </div>
+      <!-- Botón para generar PDFs cuando el job termina -->
+      <div id="pdf-actions" class="pdf-actions" style="display:none; gap:8px; align-items:center; margin-top:10px;">
+  <input id="hojaBase" placeholder='Hoja base (opcional, ej. "OFICINA (VES)")' />
+  <button id="btnGenPDFs" type="button">Generar PDFs</button>
+  <a id="btnZipPDFs" href="#" download style="display:none;">Descargar ZIP de PDFs</a>
+  <small id="pdfMsg" class="muted" style="margin-left:6px;"></small>
+</div>
+
+
+    </section>
+  </main>
+
+  <script src="/static/app.js?v=2"></script>
+
+</body>
+</html>
