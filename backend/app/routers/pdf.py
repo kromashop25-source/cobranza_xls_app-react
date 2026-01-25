@@ -1,5 +1,6 @@
 ﻿# app/routers/pdf.py
 import io
+import json
 import traceback
 import zipfile
 from datetime import datetime
@@ -15,7 +16,7 @@ from fastapi import (
     UploadFile,
 )
 
-from ..services.pdf_export_service import export_vendor_pdfs
+from ..services.pdf_export_service import export_vendor_pdfs, list_vendor_blocks
 
 router = APIRouter(prefix="/pdf", tags=["pdf"])
 
@@ -27,9 +28,27 @@ def _log(msg: str) -> None:
     with LOG_FILE.open("a", encoding="utf-8") as fh:
         fh.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
 
+def _parse_json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+    except Exception as exc:
+        raise ValueError(f"Formato de lista inválido: {exc}") from exc
+    if not isinstance(data, list):
+        raise ValueError("Se esperaba una lista JSON.")
+    return [str(item) for item in data]
+
 
 @router.post("/export")
-def exportar_pdfs(file_path: str, hoja_base: str | None = None, carpeta_salida: str | None = None):
+def exportar_pdfs(
+    file_path: str,
+    hoja_base: str | None = None,
+    carpeta_salida: str | None = None,
+    orden: str | None = None,
+    excluir: str | None = None,
+    pdf_date: str | None = None,
+):
     """
     Genera PDFs por vendedor. SUR y NORTE se exportan completas.
     - file_path: ruta completa al Excel.
@@ -58,11 +77,20 @@ def exportar_pdfs(file_path: str, hoja_base: str | None = None, carpeta_salida: 
         raise HTTPException(status_code=400, detail=f"No se pudo crear la carpeta de salida: {exc}")
 
     try:
+        orden_ids = _parse_json_list(orden)
+        excluir_ids = _parse_json_list(excluir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
         pdfs = export_vendor_pdfs(
             xls_path=xls,
             out_dir=out,
-            hojas_completas=("SUR", "NORTE"),
-            hoja_base=hoja_base
+            hojas_completas=("SUR", "NORTE", "IMPORTE CUENTA SALDO"),
+            hoja_base=hoja_base,
+            orden_ids=orden_ids,
+            excluir_ids=excluir_ids,
+            pdf_date=pdf_date,
         )
     except (ValueError, RuntimeError) as exc:
         _log(f"ERROR export: {exc}")
@@ -80,6 +108,9 @@ def exportar_pdfs(file_path: str, hoja_base: str | None = None, carpeta_salida: 
 async def export_pdfs_upload(
     excel: UploadFile = File(..., description="XLS formateado"),
     hoja_base: str | None = Form(None),
+    orden: str | None = Form(None),
+    excluir: str | None = Form(None),
+    pdf_date: str | None = Form(None),
 ):
     """
     Recibe un XLS formateado subido por el usuario y devuelve un ZIP con los PDFs.
@@ -97,11 +128,20 @@ async def export_pdfs_upload(
         out_dir = xls_path.parent / "PDFS"
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        try:
+            orden_ids = _parse_json_list(orden)
+            excluir_ids = _parse_json_list(excluir)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
         files = export_vendor_pdfs(
             xls_path=xls_path,
             out_dir=out_dir,
-            hojas_completas=("SUR", "NORTE"),
+            hojas_completas=("SUR", "NORTE", "IMPORTE CUENTA SALDO"),
             hoja_base=hoja_base,
+            orden_ids=orden_ids,
+            excluir_ids=excluir_ids,
+            pdf_date=pdf_date,
         )
         if not files:
             raise HTTPException(
@@ -121,6 +161,45 @@ async def export_pdfs_upload(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
     )
+
+
+@router.post("/preview-upload")
+async def preview_pdfs_upload(
+    excel: UploadFile = File(..., description="XLS formateado"),
+    hoja_base: str | None = Form(None),
+):
+    """
+    Devuelve la lista de bloques detectados (para ordenar/excluir en el UI).
+    """
+    fname = (excel.filename or "").strip()
+    if not fname.lower().endswith(".xls"):
+        raise HTTPException(status_code=400, detail="Se espera un .XLS")
+
+    with TemporaryDirectory(prefix="pdf_prev_") as td:
+        tmp_dir = Path(td)
+        safe_name = Path(fname).name or "COBRANZA.xls"
+        xls_path = tmp_dir / safe_name
+        xls_path.write_bytes(await excel.read())
+
+        try:
+            blocks = list_vendor_blocks(
+                xls_path=xls_path,
+                hojas_completas=("SUR", "NORTE", "IMPORTE CUENTA SALDO"),
+                hoja_base=hoja_base,
+            )
+        except (ValueError, RuntimeError) as exc:
+            _log(f"ERROR preview: {exc}")
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            tb = traceback.format_exc()
+            _log(f"ERROR preview: {exc}\n{tb}")
+            raise HTTPException(status_code=500, detail=f"Fallo analizando XLS: {exc}")
+
+    payload = [
+        {"id": b["id"], "name": b["vendor_name"], "sheet": b["sheet_name"]}
+        for b in blocks
+    ]
+    return {"status": "ok", "count": len(payload), "blocks": payload}
 
 
 @router.get("/debug-blocks")

@@ -58,10 +58,10 @@ ALIAS_MAP = {
     "MANCHAY - (ROSA)": "MANCHAY",
     "UNICACHI SUR - (ROSA)": "UNICACHI",
     "SURQ/SURCO - (OSCAR)": "SURQ/SURCO",      # va a pestaña SURQUILLO
-    "SAN LUIS (ABNER)": "SAN LUIS",
+    "SAN LUIS (OSCAR)": "SAN LUIS",
     "CAQUETA (ROSA)": "CAQUETA",
-    "SURQUILLO (ABNER)": "SURQUILLO", 
-    "SURCO (ABNER)": "SURCO", # texto en col B
+    "SURQUILLO (OSCAR)": "SURQUILLO", 
+    "SURCO (OSCAR)": "SURCO", # texto en col B
     "NORTE - ROSA": "NORTE",
     "RAUL ARROYO": "RAUL",
 }
@@ -186,11 +186,8 @@ def _tokens(norm_text: str) -> list[str]:
     return [t for t in re.split(r"[^A-Z0-9]+", norm_text) if len(t) >= 3]
 
 def _is_fuzzy_match(cell_norm: str, vendor_norm: str) -> bool:
-    if cell_norm == vendor_norm:
-        return True
-    ct = set(_tokens(cell_norm))
-    vt = set(_tokens(vendor_norm))
-    return bool(ct) and ct.issubset(vt)
+    # Match exacto solamente (nombres fijos del sistema).
+    return cell_norm == vendor_norm
 
 def _alias_map_norm() -> dict[str, str]:
     return { _norm(k): _norm(v) for k, v in ALIAS_MAP.items() }

@@ -11,6 +11,7 @@ from typing import List, Tuple, Optional, Dict
 import re
 import time
 import unicodedata
+from datetime import datetime
 
 import pythoncom
 import win32com.client as win32  # si no estaba
@@ -165,6 +166,33 @@ def _sanitize(name: str) -> str:
     return clean or re.sub(r'[^A-Za-z0-9Ññ]+', '_', name).strip()
 
 # ------------------------
+# Helpers extra
+# ------------------------
+def _strip_leading_code(name: str) -> str:
+    """Quita prefijos numéricos tipo '000012 ' del nombre."""
+    return re.sub(r"^\s*\d+\s+", "", name or "").strip()
+
+def _date_tag_from_iso(iso_date: Optional[str]) -> Optional[str]:
+    """'YYYY-MM-DD' -> 'DD-MM-YYYY' (para nombre de archivo)."""
+    if not iso_date:
+        return None
+    try:
+        dt = datetime.strptime(iso_date, "%Y-%m-%d")
+        return dt.strftime("%d-%m-%Y")
+    except Exception:
+        return None
+
+def _with_date_suffix(base: str, date_tag: Optional[str]) -> str:
+    if not date_tag:
+        return base
+    return f"{base} {date_tag}"
+
+def _make_block_id(sheet_name: str, row_start: int, row_end: int, vendor_name: str) -> str:
+    return f"{sheet_name}|{row_start}-{row_end}|{vendor_name}"
+
+SALDOS_BLOCK_ID = "__SALDOS_COBRANZA__"
+
+# ------------------------
 # Lectura de celdas (rápida)
 # ------------------------
 def _get_used_range(ws) -> Tuple[int, int, int, int]:
@@ -242,6 +270,121 @@ def _find_vendor_blocks(ws) -> List[Dict]:
 
     return blocks
 
+def _scan_vendor_blocks(
+    wb,
+    hojas_completas_set: set[str],
+    target_sheet_name: Optional[str],
+) -> Tuple[List[Dict], Dict[str, Optional[Tuple[int, int]]]]:
+    """
+    Devuelve lista de bloques con id y un dict sheet->header_rows.
+    Preserva el orden de las hojas y filas.
+    """
+    blocks_out: List[Dict] = []
+    header_rows_map: Dict[str, Optional[Tuple[int, int]]] = {}
+
+    for ws in wb.Worksheets:
+        name = str(ws.Name)
+        name_clean = name.strip()
+
+        if name_clean in hojas_completas_set:
+            continue
+        if target_sheet_name and name != target_sheet_name:
+            continue
+
+        blocks = _find_vendor_blocks(ws)
+        if not blocks:
+            continue
+
+        first_vendor_row = min(blk["row_start"] for blk in blocks)
+        header_rows: Optional[Tuple[int, int]] = None
+        if first_vendor_row > 1:
+            header_rows = (1, first_vendor_row - 1)
+        header_rows_map[name] = header_rows
+
+        for blk in blocks:
+            block_id = _make_block_id(name, blk["row_start"], blk["row_end"], blk["vendor_name"])
+            blocks_out.append({
+                "id": block_id,
+                "vendor_name": blk["vendor_name"],
+                "row_start": blk["row_start"],
+                "row_end": blk["row_end"],
+                "sheet_name": name,
+            })
+
+    return blocks_out, header_rows_map
+
+def _apply_order(preferred_ids: Optional[List[str]], available_ids: List[str]) -> List[str]:
+    """
+    Aplica un orden preferido, sin dejar huecos si faltan IDs.
+    Los que no estÃ¡n en preferred_ids se agregan al final en su orden original.
+    """
+    if not preferred_ids:
+        return list(available_ids)
+    available_set = set(available_ids)
+    ordered = [pid for pid in preferred_ids if pid in available_set]
+    ordered_set = set(ordered)
+    ordered.extend([vid for vid in available_ids if vid not in ordered_set])
+    return ordered
+
+def list_vendor_blocks(
+    xls_path: Path,
+    hojas_completas: Tuple[str, ...] = ("SUR", "NORTE", "IMPORTE CUENTA SALDO"),
+    hoja_base: Optional[str] = None,
+    include_saldos: bool = True,
+) -> List[Dict]:
+    """
+    Devuelve la lista de bloques detectados (sin exportar PDFs).
+    Cada item incluye: id, vendor_name, row_start, row_end, sheet_name.
+    """
+    initialized = False
+    try:
+        pythoncom.CoInitialize()
+        initialized = True
+    except pythoncom.com_error as exc:
+        raise RuntimeError(f'No se pudo inicializar COM: {exc}') from exc
+
+    excel = None
+    wb = None
+    try:
+        excel = win32.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        try:
+            wb = excel.Workbooks.Open(str(xls_path))
+        except Exception as exc:
+            raise RuntimeError(f"No se pudo abrir el archivo de Excel: {exc}") from exc
+
+        hojas_completas_set = {alias.strip() for alias in hojas_completas}
+        hoja_lookup = {ws.Name.strip().lower(): ws.Name for ws in wb.Worksheets}
+
+        hoja_base_normalized: Optional[str] = None
+        if hoja_base:
+            hoja_base_normalized = hoja_base.strip().lower()
+            if hoja_base_normalized not in hoja_lookup:
+                raise ValueError(f"No existe la hoja solicitada: {hoja_base}")
+
+        target_sheet_name = hoja_lookup.get(hoja_base_normalized) if hoja_base_normalized else None
+        blocks, _ = _scan_vendor_blocks(wb, hojas_completas_set, target_sheet_name)
+        if include_saldos:
+            blocks = [
+                {
+                    "id": SALDOS_BLOCK_ID,
+                    "vendor_name": "SALDOS COBRANZA",
+                    "row_start": 0,
+                    "row_end": 0,
+                    "sheet_name": "GENERAL",
+                }
+            ] + blocks
+        return blocks
+    finally:
+        if wb is not None:
+            wb.Close(SaveChanges=False)
+        if excel is not None:
+            time.sleep(0.2)
+            excel.Quit()
+        if initialized:
+            pythoncom.CoUninitialize()
+
 
 # ------------------------
 # Exportación
@@ -249,8 +392,11 @@ def _find_vendor_blocks(ws) -> List[Dict]:
 def export_vendor_pdfs(
     xls_path: Path,
     out_dir: Path,
-    hojas_completas: Tuple[str, ...] = ("SUR", "NORTE"),
-    hoja_base: Optional[str] = None
+    hojas_completas: Tuple[str, ...] = ("SUR", "NORTE", "IMPORTE CUENTA SALDO"),
+    hoja_base: Optional[str] = None,
+    orden_ids: Optional[List[str]] = None,
+    excluir_ids: Optional[List[str]] = None,
+    pdf_date: Optional[str] = None,
 ) -> List[Path]:
     """
     xls_path: ruta del Excel origen.
@@ -258,8 +404,12 @@ def export_vendor_pdfs(
     hojas_completas: hojas que se exportan tal cual.
     hoja_base: si se especifica, solo procesa esa hoja para bloques de vendedor;
                si es None, intenta procesar todas las hojas no incluidas en hojas_completas.
+    orden_ids: orden preferido (IDs de bloques) para el consolidado y numeracion.
+    excluir_ids: IDs de bloques a excluir del consolidado (no afecta los PDFs individuales).
+    pdf_date: fecha ISO (YYYY-MM-DD) para agregar al nombre de archivos.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    date_tag = _date_tag_from_iso(pdf_date)
 
     initialized = False
     try:
@@ -271,6 +421,7 @@ def export_vendor_pdfs(
     excel = None
     wb = None
     generated: List[Path] = []
+    pdf_by_id: Dict[str, Path] = {}
 
     try:
         excel = win32.DispatchEx("Excel.Application")
@@ -298,53 +449,59 @@ def export_vendor_pdfs(
             name_clean = name.strip()
 
             if name_clean in hojas_completas_set:
-                pdf_name = f"COBRANZA_{_sanitize(name_clean)}.pdf"
+                pdf_base = f"COBRANZA_{_sanitize(name_clean)}"
+                pdf_name = f"{_with_date_suffix(pdf_base, date_tag)}.pdf"
                 pdf_path = out_dir / pdf_name
                 ws.ExportAsFixedFormat(Type=0, Filename=str(pdf_path), Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False)
                 generated.append(pdf_path)
-                continue
 
-            if target_sheet_name and name != target_sheet_name:
-                continue
+        blocks, header_rows_map = _scan_vendor_blocks(wb, hojas_completas_set, target_sheet_name)
+        block_ids = [blk["id"] for blk in blocks]
+        if orden_ids:
+            ordered_block_ids = _apply_order(orden_ids, block_ids)
+        else:
+            ordered_block_ids = list(block_ids)
+        seq_map = {bid: idx + 1 for idx, bid in enumerate(ordered_block_ids)}
 
-            if hoja_base is None and name_clean in hojas_completas_set:
-                continue
+        available_ids_for_merge = [SALDOS_BLOCK_ID] + block_ids
+        if orden_ids:
+            ordered_ids_for_merge = _apply_order(orden_ids, available_ids_for_merge)
+        else:
+            ordered_ids_for_merge = list(available_ids_for_merge)
 
-            blocks = _find_vendor_blocks(ws)
-            if not blocks:
-                continue
+        for blk in blocks:
+            ws = wb.Worksheets(blk["sheet_name"])
+            header_rows = header_rows_map.get(blk["sheet_name"])
+            vendor_name_raw = blk["vendor_name"].strip()
+            vendor_display = _strip_leading_code(vendor_name_raw)
+            vendor = _sanitize(vendor_display) or "SIN_NOMBRE"
+            row_start = blk["row_start"]
+            row_end = blk["row_end"]
+            seq = seq_map.get(blk["id"], 0)
 
-            header_rows: Optional[Tuple[int, int]] = None
-            first_vendor_row = min(blk["row_start"] for blk in blocks)
-            if first_vendor_row > 1:
-                header_rows = (1, first_vendor_row - 1)
-
-            for blk in blocks:
-                vendor_name_raw = blk["vendor_name"].strip()
-                vendor = _sanitize(vendor_name_raw) or "SIN_NOMBRE"
-                row_start = blk["row_start"]
-                row_end = blk["row_end"]
-
-                tmp = wb.Worksheets.Add(After=ws)
-                tmp_base = f"_tmp_{vendor[:20] or 'VEN'}"
-                tmp_name = tmp_base
-                suffix = 1
-                while True:
-                    try:
-                        tmp.Name = tmp_name
-                        break
-                    except Exception:
-                        tmp_name = f"{tmp_base[:18]}_{suffix}"
-                        suffix += 1
-
+            tmp = wb.Worksheets.Add(After=ws)
+            tmp_base = f"_tmp_{vendor[:20] or 'VEN'}"
+            tmp_name = tmp_base
+            suffix = 1
+            while True:
                 try:
-                    aplicar_layout_modelo(ws, tmp, row_start, row_end, header_rows=header_rows)
-                    pdf_name = f"COBRANZA_{vendor}.pdf"
-                    pdf_path = out_dir / pdf_name
-                    tmp.ExportAsFixedFormat(Type=0, Filename=str(pdf_path), Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False)
-                    generated.append(pdf_path)
-                finally:
-                    tmp.Delete()
+                    tmp.Name = tmp_name
+                    break
+                except Exception:
+                    tmp_name = f"{tmp_base[:18]}_{suffix}"
+                    suffix += 1
+
+            try:
+                aplicar_layout_modelo(ws, tmp, row_start, row_end, header_rows=header_rows)
+                prefix = f"{seq:06d} " if seq else ""
+                pdf_base = f"COBRANZA_{prefix}{vendor}"
+                pdf_name = f"{_with_date_suffix(pdf_base, date_tag)}.pdf"
+                pdf_path = out_dir / pdf_name
+                tmp.ExportAsFixedFormat(Type=0, Filename=str(pdf_path), Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False)
+                generated.append(pdf_path)
+                pdf_by_id[blk["id"]] = pdf_path
+            finally:
+                tmp.Delete()
     finally:
         if wb is not None:
             wb.Close(SaveChanges=False)
@@ -354,22 +511,45 @@ def export_vendor_pdfs(
         if initialized:
             pythoncom.CoUninitialize()
 
-    excluded_merge_names = {
-        "COBRANZA_IMPORTE CUENTA SALDO.pdf",
-        "COBRANZA_000020 SURQUILLO_SURCO - (OSCAR).pdf",
-        "COBRANZA_000000 OFICINA (VES).pdf",
-        # Agrega aquí los nombres exactos que quieres omitir
-        # "COBRANZA_000002 PITER HUAYTA.pdf",
-    }
-    excluded_merge = {name.strip().lower() for name in excluded_merge_names}
-
-    consolidated_name = "COBRANZA_CONSOLIDADO.pdf"
-    merge_candidates = [
-        pdf for pdf in generated
-        if pdf.exists()
-        and pdf.name.lower() not in excluded_merge
-        and pdf.name.lower() != consolidated_name.lower()
+    # Merging especial: SALDOS COBRANZA (IMPORTE CUENTA SALDO + NORTE + SUR)
+    saldos_components = [
+        "COBRANZA_IMPORTE CUENTA SALDO",
+        "COBRANZA_SUR",
+        "COBRANZA_NORTE",
     ]
+    generated_by_name = {p.name.lower(): p for p in generated}
+    saldos_paths: List[Path] = []
+    for base in saldos_components:
+        expected = f"{_with_date_suffix(base, date_tag)}.pdf".lower()
+        if expected in generated_by_name:
+            saldos_paths.append(generated_by_name[expected])
+
+    saldos_path = None
+    if saldos_paths:
+        saldos_base = "SALDOS COBRANZA"
+        saldos_name = f"{_with_date_suffix(saldos_base, date_tag)}.pdf"
+        saldos_path = out_dir / saldos_name
+        merged_saldos = _merge_pdf_files(saldos_paths, saldos_path)
+        if merged_saldos:
+            generated = [p for p in generated if p not in saldos_paths]
+            generated.append(merged_saldos)
+            saldos_path = merged_saldos
+
+    # Consolidado con orden y exclusion
+    exclude_set = set(excluir_ids or [])
+    merge_candidates: List[Path] = []
+    for bid in ordered_ids_for_merge:
+        if bid in exclude_set:
+            continue
+        if bid == SALDOS_BLOCK_ID:
+            if saldos_path and saldos_path.exists():
+                merge_candidates.append(saldos_path)
+            continue
+        if bid in pdf_by_id and pdf_by_id[bid].exists():
+            merge_candidates.append(pdf_by_id[bid])
+
+    consolidated_base = "COBRANZA_CONSOLIDADO"
+    consolidated_name = f"{_with_date_suffix(consolidated_base, date_tag)}.pdf"
     merged_path = None
     if merge_candidates:
         consolidated_path = out_dir / consolidated_name
