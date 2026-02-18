@@ -3,6 +3,8 @@ setlocal
 title Build .EXE sin consola - CobranzaApp
 
 cd /d "%~dp0"
+set "ROOT_DIR=%~dp0.."
+for %%I in ("%ROOT_DIR%") do set "ROOT_DIR=%%~fI"
 
 echo ===============================================
 echo   Build .EXE sin consola - CobranzaApp
@@ -13,9 +15,9 @@ set "VENV_DIR=%CD%\.buildvenv"
 if exist "%VENV_DIR%\Scripts\python.exe" (
   set "VENV_SCRIPTS=%VENV_DIR%\Scripts"
   set "PYTHON=%VENV_SCRIPTS%\python.exe"
-  "%PYTHON%" -c "import sys" >nul 2>&1
+  "%PYTHON%" -c "import sys; raise SystemExit(0 if (3,11) <= sys.version_info[:2] < (3,14) else 1)" >nul 2>&1
   if errorlevel 1 (
-    echo Venv de build invalido, recreando...
+    echo Venv de build invalido o con Python no soportado, recreando...
     rmdir /s /q "%VENV_DIR%"
   )
 )
@@ -27,6 +29,14 @@ if not exist "%VENV_DIR%\Scripts\python.exe" (
       "%BASE_PY%" -m venv "%VENV_DIR%" >nul 2>&1
     )
   )
+)
+
+if not exist "%VENV_DIR%\Scripts\python.exe" (
+  py -3.13 -m venv "%VENV_DIR%" >nul 2>&1
+)
+
+if not exist "%VENV_DIR%\Scripts\python.exe" (
+  py -3.12 -m venv "%VENV_DIR%" >nul 2>&1
 )
 
 if not exist "%VENV_DIR%\Scripts\python.exe" (
@@ -50,13 +60,22 @@ if not exist "%PYTHON%" (
 )
 
 echo [2/6] Actualizando pip/setuptools/wheel...
-"%PYTHON%" -m pip install --upgrade pip setuptools wheel
+"%PYTHON%" -m pip install --upgrade pip wheel "setuptools<81" || (
+  echo Error actualizando herramientas base de Python.
+  exit /b 1
+)
 
 echo [3/6] Instalando dependencias del proyecto...
-"%PYTHON%" -m pip install -r "%CD%\requirements.txt"
+"%PYTHON%" -m pip install -r "%ROOT_DIR%\requirements.txt" || (
+  echo Error instalando dependencias del proyecto.
+  exit /b 1
+)
 
 echo [4/6] Instalando herramientas de build...
-"%PYTHON%" -m pip install pyinstaller pywin32
+"%PYTHON%" -m pip install pyinstaller pywin32 || (
+  echo Error instalando herramientas de build.
+  exit /b 1
+)
 
 echo [5/6] Limpieza de build/dist previos...
 if exist build rmdir /s /q build

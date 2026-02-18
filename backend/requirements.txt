@@ -1,9 +1,0 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-python-multipart==0.0.9
-pywin32; platform_system=="Windows"
-pypdf==4.3.1
-pystray
-Pillow
-# opcional (copiar URL al portapapeles):
-pyperclip

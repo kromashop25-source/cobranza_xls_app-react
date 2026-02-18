@@ -7,7 +7,7 @@ hiddenimports += collect_submodules('pythoncom')
 
 
 a = Analysis(
-    ['D:\\cobranza_xls_app-13-10-25\\run_app.py'],
+    ['C:\\Users\\ccordova\\Desktop\\PROYECTO\\PROJECT\\cobranza_xls_app-react\\backend\\run_app.py'],
     pathex=[],
     binaries=[],
     datas=[('app\\static', 'app\\static'), ('app\\data', 'app\\data')],

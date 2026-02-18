@@ -16,6 +16,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routers import pdf as pdf_router
+from .observability import health_payload, setup_observability
+from .queue_runtime import queue_status_payload
 
 from .services.excel_copy import copy_first_sheet_exact, ExcelCopyError
 
@@ -70,6 +72,7 @@ logger = logging.getLogger("cobranza.app")
 
 app = FastAPI()
 app.include_router(pdf_router.router)
+setup_observability(app)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -411,6 +414,16 @@ def master_default_info():
     if os.getenv("COBRANZA_DEBUG") == "1":
         payload["debug_path"] = str(path)
     return payload
+
+
+@app.get("/health")
+def health():
+    return health_payload()
+
+
+@app.get("/queue/status")
+def queue_status():
+    return queue_status_payload()
 
 
 # -------------------------------------------------

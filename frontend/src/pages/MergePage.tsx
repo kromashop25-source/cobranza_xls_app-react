@@ -1,9 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { Controller, useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
+import { z } from "zod";
+
+import DateInput from "../components/DateInput";
 import FileField from "../components/FileField";
 import ProgressBar from "../components/ProgressBar";
 import { StatusLine } from "../components/StatusLine";
-import { downloadBlob, xhrPostWithProgress } from "../api/client";
+import { downloadBlob, fetchJson, xhrPostWithProgressCancelable } from "../api/client";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Button } from "../components/ui/button";
+import { Label } from "../components/ui/label";
+import { Switch } from "../components/ui/switch";
 
 type MasterInfo = {
   exists: boolean;
@@ -11,184 +21,297 @@ type MasterInfo = {
   debug_path?: string | null;
 };
 
-function buildDownloadName(source: File | null, hdrDate: string) {
+type DropHandler = (file: File) => void;
+
+type MergePageProps = {
+  registerDropHandler?: (handler: DropHandler | null) => void;
+};
+
+const mergeFormSchema = z
+  .object({
+    source: z.union([z.instanceof(File), z.null()]),
+    master: z.union([z.instanceof(File), z.null()]),
+    hdrDate: z.string().optional(),
+    useDefaultMaster: z.boolean(),
+  })
+  .superRefine((values, ctx) => {
+    if (!(values.source instanceof File)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["source"],
+        message: "Carga el archivo de tecnicos (.XLS).",
+      });
+    }
+
+    if (!values.useDefaultMaster && !(values.master instanceof File)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["master"],
+        message: 'Carga el maestro o activa "Usar maestro por defecto".',
+      });
+    }
+  });
+
+type MergeFormValues = z.infer<typeof mergeFormSchema>;
+
+function buildDownloadName(source: File | null, hdrDate: string | undefined) {
   if (source?.name) {
     return source.name;
   }
   if (hdrDate) {
-    const [y, m, d] = hdrDate.split("-");
-    if (y && m && d) {
-      return `COBRANZA_${d}-${m}-${y.slice(-2)}.xls`;
+    const [year, month, day] = hdrDate.split("-");
+    if (year && month && day) {
+      return `COBRANZA_${day}-${month}-${year.slice(-2)}.xls`;
     }
   }
   return "COBRANZA.xls";
 }
 
-export default function MergePage() {
-  const [source, setSource] = useState<File | null>(null);
-  const [master, setMaster] = useState<File | null>(null);
-  const [hdrDate, setHdrDate] = useState("");
-  const [useDefault, setUseDefault] = useState(true);
+function isXlsFile(file: File) {
+  return file.name.toLowerCase().endsWith(".xls");
+}
+
+export default function MergePage({ registerDropHandler }: MergePageProps) {
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(true);
   const [progress, setProgress] = useState(0);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [masterInfo, setMasterInfo] = useState<MasterInfo | null>(null);
+  const activeMergeCancelRef = useRef<(() => void) | null>(null);
+
+  const {
+    control,
+    handleSubmit,
+    setValue,
+    watch,
+    formState: { isSubmitting },
+  } = useForm<MergeFormValues>({
+    resolver: zodResolver(mergeFormSchema),
+    defaultValues: {
+      source: null,
+      master: null,
+      hdrDate: "",
+      useDefaultMaster: true,
+    },
+  });
+
+  const useDefaultMaster = watch("useDefaultMaster");
+  const selectedSource = watch("source");
+  const selectedMaster = watch("master");
 
   useEffect(() => {
-    let active = true;
-    fetch("/master/default-info")
-      .then((resp) => resp.json())
-      .then((data: MasterInfo) => {
-        if (active) setMasterInfo(data);
-      })
-      .catch(() => {
-        if (active) setMasterInfo({ exists: false });
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+    if (!registerDropHandler) return;
+
+    registerDropHandler((file) => {
+      if (!isXlsFile(file)) {
+        setStatusOk(false);
+        setStatus("Solo se permiten archivos .XLS en esta pantalla.");
+        return;
+      }
+
+      setValue("source", file, { shouldDirty: true, shouldValidate: true });
+      setStatusOk(true);
+      setStatus(`Archivo cargado por arrastre: ${file.name}`);
+    });
+
+    return () => registerDropHandler(null);
+  }, [registerDropHandler, setValue]);
+
+  const masterInfoQuery = useQuery({
+    queryKey: ["master-default-info"],
+    queryFn: () => fetchJson<MasterInfo>("/master/default-info"),
+    staleTime: 30_000,
+  });
+
+  const submitMergeMutation = useMutation({
+    mutationFn: async (values: MergeFormValues) => {
+      const formData = new FormData();
+      if (values.source instanceof File) formData.append("source", values.source);
+      if (!values.useDefaultMaster && values.master instanceof File) {
+        formData.append("master", values.master);
+      }
+      if (values.hdrDate) formData.append("hdr_date", values.hdrDate);
+      formData.append("use_default_master", values.useDefaultMaster ? "1" : "0");
+
+      const task = xhrPostWithProgressCancelable(
+        "/merge",
+        formData,
+        (pct) => setProgress(Math.min(70, Math.round(pct))),
+        (pct) => setProgress(Math.round(pct))
+      );
+
+      activeMergeCancelRef.current = task.cancel;
+      try {
+        return await task.promise;
+      } finally {
+        activeMergeCancelRef.current = null;
+      }
+    },
+  });
 
   const defaultMasterHint = useMemo(() => {
-    if (!masterInfo) return "Verificando maestro por defecto...";
-    if (!masterInfo.exists) {
-      const extra = masterInfo.debug_path
-        ? ` (Ruta: ${masterInfo.debug_path})`
-        : "";
+    if (masterInfoQuery.isPending) return "Verificando maestro por defecto...";
+    const info = masterInfoQuery.data;
+    if (!info?.exists) {
+      const extra = info?.debug_path ? ` (Ruta: ${info.debug_path})` : "";
       return `No se encontro el maestro alojado.${extra}`;
     }
-    return `Usar ${masterInfo.name ?? "maestro por defecto"}`;
-  }, [masterInfo]);
+    return `Usar ${info.name ?? "maestro por defecto"}`;
+  }, [masterInfoQuery.data, masterInfoQuery.isPending]);
 
-  const handleToggleDefault = (checked: boolean) => {
-    setUseDefault(checked);
-    if (checked) setMaster(null);
+  const handleCancel = () => {
+    if (!activeMergeCancelRef.current) return;
+    activeMergeCancelRef.current();
+    activeMergeCancelRef.current = null;
+    setProgress(0);
+    setStatusOk(false);
+    setStatus("Proceso cancelado por el usuario.");
   };
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!source) {
-      setStatusOk(false);
-      setStatus("Carga el archivo de tecnicos (.XLS).");
-      return;
-    }
-    if (!useDefault && !master) {
-      setStatusOk(false);
-      setStatus('Carga el maestro o activa "Usar maestro por defecto".');
-      return;
-    }
-
-    setIsSubmitting(true);
+  const onSubmit = handleSubmit(async (values) => {
     setStatus("Procesando, por favor espera...");
     setStatusOk(true);
     setProgress(1);
 
     try {
-      const fd = new FormData();
-      fd.append("source", source);
-      if (!useDefault && master) fd.append("master", master);
-      if (hdrDate) fd.append("hdr_date", hdrDate);
-      fd.append("use_default_master", useDefault ? "1" : "0");
-
-      const blob = await xhrPostWithProgress(
-        "/merge",
-        fd,
-        (pct) => setProgress(Math.min(70, Math.round(pct))),
-        (pct) => setProgress(Math.round(pct))
-      );
-
-      const filename = buildDownloadName(source, hdrDate);
+      const blob = await submitMergeMutation.mutateAsync(values);
+      const filename = buildDownloadName(values.source, values.hdrDate);
       downloadBlob(blob, filename);
       setStatus(`Listo. Se descargo ${filename}.`);
       setStatusOk(true);
     } catch (error) {
       setStatusOk(false);
-      setStatus(
-        error instanceof Error ? error.message : "Error desconocido al procesar."
-      );
+      setStatus(error instanceof Error ? error.message : "Error desconocido al procesar.");
     } finally {
       setProgress(0);
-      setIsSubmitting(false);
     }
-  };
+  });
+
+  const isBusy = isSubmitting || submitMergeMutation.isPending;
 
   return (
-    <div className="container py-4">
-      <h1 className="h4 mb-2 text-body-emphasis">Cobranza XLS - Copiar a Maestro</h1>
-      <p className="text-muted mb-4">
-        Requiere Windows con Microsoft Excel instalado. Extension .XLS antigua.
-      </p>
-
-      {/* Wrapper flex propio: evita depender de .row que Adminator modifica */}
-      <div className="d-flex justify-content-center">
-        <div className="card shadow-sm app-panel w-100">
-          <div className="card-body">
-              <form onSubmit={handleSubmit}>
-
-            <FileField
-              label="Origen (.XLS tecnicos)"
-              accept=".xls"
-              required
-              onChange={setSource}
-              hint="Archivo exportado por el equipo de cobranzas."
-            />
-
-            <div className="form-check form-switch mb-2">
-              <input
-                id="useDefaultMaster"
-                className="form-check-input"
-                type="checkbox"
-                checked={useDefault}
-                onChange={(e) => handleToggleDefault(e.target.checked)}
+    <section className="mx-auto w-full max-w-4xl">
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24 }}>
+        <Card className="border-border/70 bg-card/95">
+          <CardHeader>
+            <CardTitle>Cobranza XLS - Copiar a Maestro</CardTitle>
+            <CardDescription>
+              Requiere Windows con Microsoft Excel instalado. Se conserva el mismo flujo de procesamiento XLS.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-5" onSubmit={onSubmit} noValidate>
+              <Controller
+                name="source"
+                control={control}
+                render={({ field, fieldState }) => (
+                  <FileField
+                    label="Origen (.XLS tecnicos)"
+                    accept=".xls"
+                    required
+                    value={field.value}
+                    onChange={field.onChange}
+                    error={fieldState.error?.message}
+                    disabled={isBusy}
+                    hint="Archivo exportado por el equipo de cobranzas."
+                  />
+                )}
               />
-              <label className="form-check-label" htmlFor="useDefaultMaster">
-                Usar maestro por defecto
-              </label>
-              <div className="form-text">{defaultMasterHint}</div>
-            </div>
 
-            {!useDefault && (
-              <FileField
-                label="Maestro (.XLS)"
-                accept=".xls"
-                required
-                onChange={setMaster}
-                hint="Archivo maestro actualizado."
-              />
-            )}
-
-            <div className="mb-3">
-              <label htmlFor="hdrDate" className="form-label">
-                Fecha (opcional)
-              </label>
-              <input
-                id="hdrDate"
-                type="date"
-                className="form-control"
-                value={hdrDate}
-                onChange={(e) => setHdrDate(e.target.value)}
-              />
-              <div className="form-text">
-                Se usara para actualizar encabezados y hojas SUR/NORTE.
+              <div className="rounded-lg border border-border p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="use-default-master">Usar maestro por defecto</Label>
+                    <p className="text-xs text-muted-foreground">{defaultMasterHint}</p>
+                  </div>
+                  <Controller
+                    name="useDefaultMaster"
+                    control={control}
+                    render={({ field }) => (
+                      <Switch
+                        id="use-default-master"
+                        checked={field.value}
+                        onCheckedChange={(checked) => {
+                          field.onChange(checked);
+                          if (checked) {
+                            setValue("master", null, { shouldValidate: true });
+                          }
+                        }}
+                        disabled={isBusy}
+                      />
+                    )}
+                  />
+                </div>
               </div>
-            </div>
 
-            <button
-                  className="btn btn-primary"
-                  type="submit"
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? "Procesando..." : "Copiar a Maestro"}
-                </button>
-              </form>
-              <div className="mt-3">
-                <StatusLine text={status} ok={statusOk} />
-                <ProgressBar value={progress} />
+              {!useDefaultMaster ? (
+                <Controller
+                  name="master"
+                  control={control}
+                  render={({ field, fieldState }) => (
+                    <FileField
+                      label="Maestro (.XLS)"
+                      accept=".xls"
+                      required
+                      value={field.value}
+                      onChange={field.onChange}
+                      error={fieldState.error?.message}
+                      disabled={isBusy}
+                      hint="Archivo maestro actualizado."
+                    />
+                  )}
+                />
+              ) : null}
+
+              <div className="space-y-2">
+                <Label htmlFor="hdrDate">Fecha (opcional)</Label>
+                <Controller
+                  name="hdrDate"
+                  control={control}
+                  render={({ field }) => (
+                    <DateInput
+                      id="hdrDate"
+                      value={field.value ?? ""}
+                      onChange={field.onChange}
+                      disabled={isBusy}
+                    />
+                  )}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Se usara para actualizar encabezados y hojas SUR/NORTE.
+                </p>
               </div>
-          </div>
-         </div>
-       </div>
-     </div>
-   );
- }
+
+              <div className="mt-3 border-t border-border/60 pt-4">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                  <Button type="submit" disabled={isBusy}>
+                    {isBusy ? "Procesando..." : "Copiar a Maestro"}
+                  </Button>
+                  {submitMergeMutation.isPending ? (
+                    <Button type="button" variant="destructive" onClick={handleCancel}>
+                      Cancelar
+                    </Button>
+                  ) : null}
+                </div>
+
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                  <p className="text-xs text-muted-foreground">
+                    Archivo origen: {selectedSource?.name ?? "sin seleccionar"}
+                  </p>
+                  {!useDefaultMaster ? (
+                    <p className="text-xs text-muted-foreground">
+                      Maestro: {selectedMaster?.name ?? "sin seleccionar"}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            </form>
+
+            <div className="mt-5 space-y-2">
+              <StatusLine text={status} ok={statusOk} />
+              <ProgressBar value={progress} />
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+    </section>
+  );
+}

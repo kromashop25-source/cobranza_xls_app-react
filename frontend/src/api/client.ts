@@ -1,9 +1,14 @@
-const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(
-  /\/$/,
-  ""
-) || window.location.origin;
+﻿const API_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ||
+  window.location.origin;
 
 export type UploadProgressCb = (pct: number) => void;
+export type CancelUploadFn = () => void;
+
+export type CancelableUpload = {
+  promise: Promise<Blob>;
+  cancel: CancelUploadFn;
+};
 
 const NETWORK_ERROR = "Error de red";
 
@@ -16,23 +21,97 @@ function readBlobAsText(blob: Blob): Promise<string> {
   });
 }
 
-async function extractErrorMessage(
-  blob: Blob,
-  status: number
-): Promise<string> {
+async function extractErrorMessage(blob: Blob, status: number): Promise<string> {
   try {
     const text = await readBlobAsText(blob);
     if (!text) return `HTTP ${status}`;
     try {
-      const parsed = JSON.parse(text);
+      const parsed = JSON.parse(text) as { detail?: unknown };
       if (parsed?.detail) return String(parsed.detail);
     } catch {
-      /* ignore json parse */
+      // ignore JSON parse errors
     }
     return text;
   } catch {
     return `HTTP ${status}`;
   }
+}
+
+export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${url}`, init);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    if (text) {
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown };
+        throw new Error(parsed?.detail ? String(parsed.detail) : text);
+      } catch {
+        throw new Error(text);
+      }
+    }
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export function xhrPostWithProgressCancelable(
+  url: string,
+  formData: FormData,
+  onUpload?: UploadProgressCb,
+  onDownload?: UploadProgressCb
+): CancelableUpload {
+  const xhr = new XMLHttpRequest();
+  let settled = false;
+
+  const promise = new Promise<Blob>((resolve, reject) => {
+    const resolveOnce = (value: Blob) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const rejectOnce = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    xhr.open("POST", `${API_BASE}${url}`);
+    xhr.responseType = "blob";
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onUpload) {
+        onUpload((event.loaded / event.total) * 70);
+      }
+    };
+
+    xhr.onprogress = (event) => {
+      if (event.lengthComputable && onDownload) {
+        onDownload(70 + (event.loaded / event.total) * 30);
+      }
+    };
+
+    xhr.onabort = () => rejectOnce(new Error("Proceso cancelado por el usuario."));
+    xhr.onerror = () => rejectOnce(new Error(NETWORK_ERROR));
+
+    xhr.onload = async () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolveOnce(xhr.response);
+        return;
+      }
+      const blob = xhr.response instanceof Blob ? xhr.response : new Blob();
+      rejectOnce(new Error(await extractErrorMessage(blob, xhr.status)));
+    };
+
+    xhr.send(formData);
+  });
+
+  const cancel = () => {
+    if (settled) return;
+    xhr.abort();
+  };
+
+  return { promise, cancel };
 }
 
 export async function xhrPostWithProgress(
@@ -41,36 +120,8 @@ export async function xhrPostWithProgress(
   onUpload?: UploadProgressCb,
   onDownload?: UploadProgressCb
 ): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API_BASE}${url}`);
-    xhr.responseType = "blob";
-
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onUpload) {
-        onUpload((e.loaded / e.total) * 70);
-      }
-    };
-
-    xhr.onprogress = (e) => {
-      if (e.lengthComputable && onDownload) {
-        onDownload(70 + (e.loaded / e.total) * 30);
-      }
-    };
-
-    xhr.onerror = () => reject(new Error(NETWORK_ERROR));
-
-    xhr.onload = async () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(xhr.response);
-        return;
-      }
-      const blob = xhr.response instanceof Blob ? xhr.response : new Blob();
-      reject(new Error(await extractErrorMessage(blob, xhr.status)));
-    };
-
-    xhr.send(formData);
-  });
+  const { promise } = xhrPostWithProgressCancelable(url, formData, onUpload, onDownload);
+  return promise;
 }
 
 export function downloadBlob(blob: Blob, filename: string) {
@@ -83,3 +134,4 @@ export function downloadBlob(blob: Blob, filename: string) {
   anchor.remove();
   URL.revokeObjectURL(url);
 }
+

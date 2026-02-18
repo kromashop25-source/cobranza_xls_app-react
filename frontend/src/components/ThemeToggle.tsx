@@ -1,18 +1,21 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
+import { MoonStar, SunMedium } from "lucide-react";
+
+import { Button } from "./ui/button";
 
 type Theme = "light" | "dark";
 
+function currentTheme(): Theme {
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+
 export default function ThemeToggle() {
-  const getTheme = (): Theme =>
-    (document.documentElement.getAttribute("data-bs-theme") as Theme) === "dark"
-      ? "dark"
-      : "light";
-  const [theme, setTheme] = useState<Theme>(getTheme());
+  const [theme, setTheme] = useState<Theme>(currentTheme());
 
   useEffect(() => {
-    const obs = new MutationObserver(() => setTheme(getTheme()));
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-bs-theme"] });
-    return () => obs.disconnect();
+    const observer = new MutationObserver(() => setTheme(currentTheme()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
   }, []);
 
   const toggle = () => {
@@ -22,13 +25,17 @@ export default function ThemeToggle() {
   };
 
   return (
-    <button
+    <Button
       type="button"
-      className={`btn btn-sm ${theme === "dark" ? "btn-outline-light" : "btn-outline-secondary"}`}
+      variant="outline"
+      size="sm"
       onClick={toggle}
       title={theme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
+      className="gap-2"
     >
-      {theme === "dark" ? "Modo claro" : "Modo oscuro"}
-    </button>
+      {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
+      {theme === "dark" ? "Claro" : "Oscuro"}
+    </Button>
   );
 }
+

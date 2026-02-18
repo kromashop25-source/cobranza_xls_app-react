@@ -1,9 +1,29 @@
-import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Controller, useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useMutation } from "@tanstack/react-query";
+import {
+  createColumnHelper,
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
+import { motion } from "framer-motion";
+import { RefreshCw } from "lucide-react";
+import { z } from "zod";
+
+import DateInput from "../components/DateInput";
 import FileField from "../components/FileField";
 import ProgressBar from "../components/ProgressBar";
 import { StatusLine } from "../components/StatusLine";
-import { downloadBlob, xhrPostWithProgress } from "../api/client";
+import { downloadBlob, xhrPostWithProgressCancelable } from "../api/client";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { Switch } from "../components/ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 
 type BlockItem = {
   id: string;
@@ -12,12 +32,34 @@ type BlockItem = {
   include: boolean;
 };
 
+type PreviewResponse = {
+  blocks: { id: string; name: string; sheet: string }[];
+  count: number;
+};
+
+type DropHandler = (file: File) => void;
+
+type PdfExportPageProps = {
+  registerDropHandler?: (handler: DropHandler | null) => void;
+};
+
+const pdfFormSchema = z.object({
+  excel: z.union([z.instanceof(File), z.null()]).refine((value): value is File => value instanceof File, {
+    message: "Adjunta el XLS previamente generado en /merge.",
+  }),
+  hojaBase: z.string().optional(),
+  pdfDate: z.string().min(1, "Selecciona la fecha usada al generar el Excel."),
+});
+
+type PdfFormInput = z.input<typeof pdfFormSchema>;
+type PdfFormValues = z.output<typeof pdfFormSchema>;
+
 const DEFAULT_CONSOLIDATED_ORDER = [
   "SALDOS COBRANZA",
   "MANUEL CARRASCO",
   "PITER HUAYTA",
   "LEONEL MEZA",
-  "CA\u00d1ETE",
+  "CANETE",
   "BEATRIZ ROJAS",
   "LURIN",
   "MANCHAY",
@@ -29,27 +71,23 @@ const DEFAULT_CONSOLIDATED_ORDER = [
   "SURQUILLO (OSCAR)",
   "SAN LUIS (OSCAR)",
   "RAUL ARROYO",
-];
+] as const;
 
 const ORDER_ALIASES: Record<string, string[]> = {
   "SALDOS COBRANZA": ["SALDOS COBRANZA"],
   "MANUEL CARRASCO": ["MANUEL CARRASCO"],
   "PITER HUAYTA": ["PITER HUAYTA"],
   "LEONEL MEZA": ["LEONEL MEZA"],
-  "CA\u00d1ETE": ["CA\u00d1ETE", "CA\u00d1ETE - (MANUEL)", "CA\u00d1ETE (MANUEL)"],
+  CANETE: ["CANETE", "CANETE - (MANUEL)", "CANETE (MANUEL)", "CAÑETE", "CAÑETE - (MANUEL)", "CAÑETE (MANUEL)"],
   "BEATRIZ ROJAS": ["BEATRIZ ROJAS"],
-  "LURIN": ["LURIN", "LURIN - (ROSA)"],
-  "MANCHAY": ["MANCHAY", "MANCHAY - (ROSA)"],
-  "CIUDAD": ["CIUDAD", "CIUDAD - (ROSA)"],
-  "UNICACHI": ["UNICACHI", "UNICACHI SUR - (ROSA)", "UNICACHI SUR (ROSA)"],
+  LURIN: ["LURIN", "LURIN - (ROSA)"],
+  MANCHAY: ["MANCHAY", "MANCHAY - (ROSA)"],
+  CIUDAD: ["CIUDAD", "CIUDAD - (ROSA)"],
+  UNICACHI: ["UNICACHI", "UNICACHI SUR - (ROSA)", "UNICACHI SUR (ROSA)"],
   "NORTE - ROSA": ["NORTE - ROSA", "NORTE ROSA", "NORTE-ROSA"],
   "CAQUETA (ROSA)": ["CAQUETA (ROSA)", "CAQUETA - (ROSA)", "CAQUETA ROSA"],
   "SURCO (OSCAR)": ["SURCO (OSCAR)", "SURCO - (OSCAR)", "SURCO OSCAR"],
-  "SURQUILLO (OSCAR)": [
-    "SURQUILLO (OSCAR)",
-    "SURQ/SURCO - (OSCAR)",
-    "SURQ/SURCO (OSCAR)",
-  ],
+  "SURQUILLO (OSCAR)": ["SURQUILLO (OSCAR)", "SURQ/SURCO - (OSCAR)", "SURQ/SURCO (OSCAR)"],
   "SAN LUIS (OSCAR)": ["SAN LUIS (OSCAR)", "SAN LUIS - (OSCAR)", "SAN LUIS OSCAR"],
   "RAUL ARROYO": ["RAUL ARROYO"],
 };
@@ -67,7 +105,7 @@ function stripLeadingCode(name: string) {
 function normalizeOrderName(name: string) {
   return stripLeadingCode(name)
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
@@ -87,16 +125,16 @@ function applyDefaultOrder(blocks: BlockItem[]) {
     .sort((a, b) => {
       const aKey = normalizeOrderName(a.name);
       const bKey = normalizeOrderName(b.name);
-      const aOrder = orderMap.has(aKey)
-        ? orderMap.get(aKey)!
-        : Number.MAX_SAFE_INTEGER;
-      const bOrder = orderMap.has(bKey)
-        ? orderMap.get(bKey)!
-        : Number.MAX_SAFE_INTEGER;
+      const aOrder = orderMap.has(aKey) ? orderMap.get(aKey)! : Number.MAX_SAFE_INTEGER;
+      const bOrder = orderMap.has(bKey) ? orderMap.get(bKey)! : Number.MAX_SAFE_INTEGER;
       if (aOrder !== bOrder) return aOrder - bOrder;
       return a._idx - b._idx;
     })
-    .map(({ _idx, ...rest }) => rest);
+    .map((item) => {
+      const { _idx: droppedIndex, ...rest } = item;
+      void droppedIndex;
+      return rest;
+    });
 }
 
 function parseDateFromFilename(name: string) {
@@ -109,80 +147,161 @@ function parseDateFromFilename(name: string) {
   return `${year}-${month}-${day}`;
 }
 
-export default function PdfExportPage() {
-  const [excel, setExcel] = useState<File | null>(null);
-  const [hojaBase, setHojaBase] = useState("");
-  const [pdfDate, setPdfDate] = useState("");
+function isXlsFile(file: File) {
+  return file.name.toLowerCase().endsWith(".xls");
+}
+
+async function parseJsonOrThrow(response: Response) {
+  const data = (await response.json().catch(() => null)) as { detail?: string } | null;
+  if (!response.ok) {
+    throw new Error(data?.detail ?? "No se pudo procesar la solicitud.");
+  }
+  return data;
+}
+
+export default function PdfExportPage({ registerDropHandler }: PdfExportPageProps) {
   const [blocks, setBlocks] = useState<BlockItem[]>([]);
   const [analysisStatus, setAnalysisStatus] = useState("");
   const [analysisOk, setAnalysisOk] = useState(true);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(true);
   const [progress, setProgress] = useState(0);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const activeExportCancelRef = useRef<(() => void) | null>(null);
 
-  const analyzeFile = async (file: File | null, hoja: string) => {
-    if (!file) return;
-    setIsAnalyzing(true);
-    setAnalysisOk(true);
-    setAnalysisStatus("Analizando XLS...");
+  const {
+    control,
+    handleSubmit,
+    setValue,
+    watch,
+    formState: { isSubmitting },
+  } = useForm<PdfFormInput, unknown, PdfFormValues>({
+    resolver: zodResolver(pdfFormSchema),
+    defaultValues: {
+      excel: null,
+      hojaBase: "",
+      pdfDate: "",
+    },
+  });
 
-    try {
-      const fd = new FormData();
-      fd.append("excel", file);
-      if (hoja.trim()) fd.append("hoja_base", hoja.trim());
+  const excel = watch("excel");
+  const hojaBase = watch("hojaBase");
 
-      const resp = await fetch("/pdf/preview-upload", {
-        method: "POST",
-        body: fd,
-      });
+  useEffect(() => {
+    if (!registerDropHandler) return;
 
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => null);
-        throw new Error(data?.detail ?? "No se pudo analizar el XLS.");
+    registerDropHandler((file) => {
+      if (!isXlsFile(file)) {
+        setStatusOk(false);
+        setStatus("Solo se permiten archivos .XLS en esta pantalla.");
+        return;
       }
 
-      const data = (await resp.json()) as {
-        blocks: { id: string; name: string; sheet: string }[];
-        count: number;
-      };
+      setValue("excel", file, { shouldDirty: true, shouldValidate: true });
+      setStatusOk(true);
+      setStatus(`Archivo cargado por arrastre: ${file.name}`);
+    });
 
-      const items = data.blocks.map((block) => ({
-        id: block.id,
-        name: block.name,
-        sheet: block.sheet,
-        include: true,
-      }));
+    return () => registerDropHandler(null);
+  }, [registerDropHandler, setValue]);
 
-      const ordered = applyDefaultOrder(items);
-      setBlocks(ordered);
-      setAnalysisStatus(`Detectados ${data.count} vendedores.`);
-      setAnalysisOk(true);
-    } catch (error) {
-      setAnalysisOk(false);
-      setAnalysisStatus(
-        error instanceof Error ? error.message : "No se pudo analizar el XLS."
+  const { mutateAsync: analyzePreview, isPending: isAnalyzing } = useMutation({
+    mutationFn: async ({ file, baseSheet }: { file: File; baseSheet: string }) => {
+      const formData = new FormData();
+      formData.append("excel", file);
+      if (baseSheet.trim()) formData.append("hoja_base", baseSheet.trim());
+
+      const response = await fetch("/pdf/preview-upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = (await parseJsonOrThrow(response)) as PreviewResponse;
+      return data;
+    },
+  });
+
+  const analyzePreviewRef = useRef(analyzePreview);
+
+  useEffect(() => {
+    analyzePreviewRef.current = analyzePreview;
+  }, [analyzePreview]);
+
+  const submitPdfMutation = useMutation({
+    mutationFn: async (values: PdfFormValues) => {
+      if (!(values.excel instanceof File)) {
+        throw new Error("Adjunta el XLS previamente generado en /merge.");
+      }
+      const formData = new FormData();
+      formData.append("excel", values.excel);
+      if (values.hojaBase?.trim()) formData.append("hoja_base", values.hojaBase.trim());
+      if (values.pdfDate) formData.append("pdf_date", values.pdfDate);
+      if (blocks.length) {
+        formData.append("orden", JSON.stringify(blocks.map((block) => block.id)));
+        formData.append(
+          "excluir",
+          JSON.stringify(blocks.filter((block) => !block.include).map((block) => block.id))
+        );
+      }
+
+      const task = xhrPostWithProgressCancelable(
+        "/pdf/export-upload",
+        formData,
+        (pct) => setProgress(Math.min(70, Math.round(pct))),
+        (pct) => setProgress(Math.round(pct))
       );
-      setBlocks([]);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
+
+      activeExportCancelRef.current = task.cancel;
+      try {
+        return await task.promise;
+      } finally {
+        activeExportCancelRef.current = null;
+      }
+    },
+  });
+
+  const runAnalysis = useCallback(
+    async (file: File | null, baseSheet: string) => {
+      if (!file) return;
+
+      setAnalysisStatus("Analizando XLS...");
+      setAnalysisOk(true);
+      try {
+        const data = await analyzePreviewRef.current({ file, baseSheet });
+        const ordered = applyDefaultOrder(
+          data.blocks.map((block) => ({
+            id: block.id,
+            name: block.name,
+            sheet: block.sheet,
+            include: true,
+          }))
+        );
+        setBlocks(ordered);
+        setAnalysisStatus(`Detectados ${data.count} vendedores.`);
+        setAnalysisOk(true);
+      } catch (error) {
+        setAnalysisStatus(error instanceof Error ? error.message : "No se pudo analizar el XLS.");
+        setAnalysisOk(false);
+        setBlocks([]);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (!excel) {
       setBlocks([]);
+      setAnalysisStatus("");
       return;
     }
+
     const inferredDate = parseDateFromFilename(excel.name);
     if (inferredDate) {
-      setPdfDate(inferredDate);
+      setValue("pdfDate", inferredDate, { shouldValidate: true });
     }
-    void analyzeFile(excel, hojaBase);
-  }, [excel]);
 
-  const handleMove = (index: number, direction: -1 | 1) => {
+    void runAnalysis(excel, hojaBase ?? "");
+  }, [excel, hojaBase, runAnalysis, setValue]);
+
+  const handleMove = useCallback((index: number, direction: -1 | 1) => {
     setBlocks((prev) => {
       const next = [...prev];
       const target = index + direction;
@@ -190,222 +309,263 @@ export default function PdfExportPage() {
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
+  }, []);
+
+  const handleToggleInclude = useCallback((id: string) => {
+    setBlocks((prev) => prev.map((item) => (item.id === id ? { ...item, include: !item.include } : item)));
+  }, []);
+
+  const columns = useMemo(() => {
+    const helper = createColumnHelper<BlockItem>();
+    return [
+      helper.display({
+        id: "order",
+        header: "#",
+        cell: (ctx) => <Badge variant="secondary">{ctx.row.index + 1}</Badge>,
+      }),
+      helper.accessor("name", {
+        header: "Vendedor",
+        cell: (ctx) => (
+          <div>
+            <p className="font-medium text-foreground">{ctx.row.original.name}</p>
+            <p className="text-xs text-muted-foreground">{ctx.row.original.sheet}</p>
+          </div>
+        ),
+      }),
+      helper.display({
+        id: "include",
+        header: "Incluir",
+        cell: (ctx) => (
+          <Switch
+            checked={ctx.row.original.include}
+            onCheckedChange={() => handleToggleInclude(ctx.row.original.id)}
+            aria-label={`Incluir ${ctx.row.original.name}`}
+          />
+        ),
+      }),
+      helper.display({
+        id: "actions",
+        header: "Orden",
+        cell: (ctx) => (
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => handleMove(ctx.row.index, -1)}
+              disabled={ctx.row.index === 0}
+            >
+              Subir
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => handleMove(ctx.row.index, 1)}
+              disabled={ctx.row.index === blocks.length - 1}
+            >
+              Bajar
+            </Button>
+          </div>
+        ),
+      }),
+    ];
+  }, [blocks.length, handleMove, handleToggleInclude]);
+
+  const table = useReactTable({
+    data: blocks,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
+  const handleCancel = () => {
+    if (!activeExportCancelRef.current) return;
+    activeExportCancelRef.current();
+    activeExportCancelRef.current = null;
+    setProgress(0);
+    setStatusOk(false);
+    setStatus("Proceso cancelado por el usuario.");
   };
 
-  const handleToggleInclude = (id: string) => {
-    setBlocks((prev) =>
-      prev.map((item) =>
-        item.id === id ? { ...item, include: !item.include } : item
-      )
-    );
-  };
-
-  const handleApplyDefaultOrder = () => {
-    setBlocks((prev) => applyDefaultOrder(prev));
-  };
-
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!excel) {
-      setStatusOk(false);
-      setStatus("Adjunta el XLS previamente generado en /merge.");
-      return;
-    }
-    if (!pdfDate) {
-      setStatusOk(false);
-      setStatus("Selecciona la fecha usada al generar el Excel.");
-      return;
-    }
-
-    setIsSubmitting(true);
+  const onSubmit = handleSubmit(async (values) => {
     setStatus("Generando PDFs...");
     setStatusOk(true);
     setProgress(1);
 
     try {
-      const fd = new FormData();
-      fd.append("excel", excel);
-      if (hojaBase.trim()) fd.append("hoja_base", hojaBase.trim());
-      if (pdfDate) fd.append("pdf_date", pdfDate);
-      if (blocks.length) {
-        fd.append("orden", JSON.stringify(blocks.map((block) => block.id)));
-        fd.append(
-          "excluir",
-          JSON.stringify(blocks.filter((block) => !block.include).map((block) => block.id))
-        );
-      }
-
-      const blob = await xhrPostWithProgress(
-        "/pdf/export-upload",
-        fd,
-        (pct) => setProgress(Math.min(70, Math.round(pct))),
-        (pct) => setProgress(Math.round(pct))
-      );
-      const zipName = buildZipName(excel);
+      const blob = await submitPdfMutation.mutateAsync(values);
+      const zipName = buildZipName(values.excel);
       downloadBlob(blob, zipName);
       setStatus(`ZIP descargado (${zipName}).`);
       setStatusOk(true);
     } catch (error) {
+      setStatus(error instanceof Error ? error.message : "No se pudo generar el ZIP.");
       setStatusOk(false);
-      setStatus(
-        error instanceof Error ? error.message : "No se pudo generar el ZIP."
-      );
     } finally {
       setProgress(0);
-      setIsSubmitting(false);
     }
-  };
+  });
+
+  const isSubmitPending = isSubmitting || submitPdfMutation.isPending;
 
   return (
-    <div className="container py-4">
-      <h1 className="h4 mb-2 text-body-emphasis">Exportar PDFs desde XLS formateado</h1>
-      <p className="text-muted mb-4">
-        Usa el archivo generado en "Copiar a Maestro". El backend devolvera un
-        ZIP con los PDFs detectados.
-      </p>
-
-      <div className="d-flex justify-content-center">
-        <div className="card shadow-sm app-panel w-100">
-          <div className="card-body">
-            <form onSubmit={handleSubmit}>
-              <FileField
-                label="XLS formateado"
-                accept=".xls"
-                required
-                onChange={setExcel}
-                hint="Es el resultado del paso /merge."
+    <section className="mx-auto w-full max-w-5xl">
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24 }}>
+        <Card className="border-border/70 bg-card/95">
+          <CardHeader>
+            <CardTitle>Exportar PDFs desde XLS formateado</CardTitle>
+            <CardDescription>
+              Usa el archivo generado en "Copiar a Maestro". El backend mantiene el mismo motor Excel/COM.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-5" onSubmit={onSubmit} noValidate>
+              <Controller
+                name="excel"
+                control={control}
+                render={({ field, fieldState }) => (
+                  <FileField
+                    label="XLS formateado"
+                    accept=".xls"
+                    required
+                    value={field.value}
+                    onChange={field.onChange}
+                    error={fieldState.error?.message}
+                    disabled={isSubmitPending}
+                    hint="Es el resultado del paso /merge."
+                  />
+                )}
               />
 
-              <div className="mb-3">
-                <label htmlFor="hojaBase" className="form-label">
-                  Hoja base (opcional)
-                </label>
-                <input
-                  id="hojaBase"
-                  type="text"
-                  className="form-control"
-                  placeholder='Ej: "OFICINA (VES)"'
-                  value={hojaBase}
-                  onChange={(e) => setHojaBase(e.target.value)}
-                />
-                <div className="form-text">
-                  Solo si deseas limitar a una hoja especifica.
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="hojaBase">Hoja base (opcional)</Label>
+                  <Controller
+                    name="hojaBase"
+                    control={control}
+                    render={({ field }) => (
+                      <Input
+                        id="hojaBase"
+                        type="text"
+                        placeholder='Ej: "OFICINA (VES)"'
+                        value={field.value ?? ""}
+                        onChange={field.onChange}
+                        disabled={isSubmitPending}
+                      />
+                    )}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Solo si deseas limitar el analisis a una hoja especifica.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="pdfDate">Fecha para nombres de PDF</Label>
+                  <Controller
+                    name="pdfDate"
+                    control={control}
+                    render={({ field, fieldState }) => (
+                      <>
+                        <DateInput
+                          id="pdfDate"
+                          value={field.value}
+                          onChange={field.onChange}
+                          disabled={isSubmitPending}
+                        />
+                        {fieldState.error?.message ? (
+                          <p className="text-xs text-destructive">{fieldState.error.message}</p>
+                        ) : null}
+                      </>
+                    )}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Usa la misma fecha seleccionada al generar el Excel.
+                  </p>
                 </div>
               </div>
 
-              <div className="mb-3">
-                <label htmlFor="pdfDate" className="form-label">
-                  Fecha para nombres de PDF
-                </label>
-                <input
-                  id="pdfDate"
-                  type="date"
-                  className="form-control"
-                  value={pdfDate}
-                  required
-                  onChange={(e) => setPdfDate(e.target.value)}
-                />
-                <div className="form-text">
-                  Usa la misma fecha seleccionada al generar el Excel.
-                </div>
-              </div>
-
-              <div className="d-flex flex-wrap gap-2 mb-2">
-                <button
-                  className="btn btn-outline-secondary"
+              <div className="mt-3 flex flex-wrap items-center gap-2 pl-0.5">
+                <Button
                   type="button"
-                  disabled={!excel || isAnalyzing}
-                  onClick={() => analyzeFile(excel, hojaBase)}
+                  variant="outline"
+                  className="gap-2"
+                  disabled={!excel || isAnalyzing || isSubmitPending}
+                  onClick={() => void runAnalysis(excel, hojaBase ?? "")}
                 >
+                  <RefreshCw className={`h-4 w-4 ${isAnalyzing ? "animate-spin" : ""}`} />
                   {isAnalyzing ? "Analizando..." : "Analizar XLS"}
-                </button>
-                <button
-                  className="btn btn-outline-secondary"
+                </Button>
+                <Button
                   type="button"
-                  disabled={!blocks.length}
-                  onClick={handleApplyDefaultOrder}
+                  variant="outline"
+                  disabled={!blocks.length || isSubmitPending}
+                  onClick={() => setBlocks((prev) => applyDefaultOrder(prev))}
                 >
                   Orden sugerido
-                </button>
+                </Button>
               </div>
 
-              {analysisStatus && (
-                <div className="mb-3">
-                  <StatusLine text={analysisStatus} ok={analysisOk} />
-                </div>
-              )}
+              {analysisStatus ? <StatusLine text={analysisStatus} ok={analysisOk} /> : null}
 
-              {blocks.length > 0 && (
-                <div className="mb-3">
-                  <div className="d-flex justify-content-between align-items-center mb-2">
-                    <div className="fw-semibold">Orden para consolidado</div>
-                    <div className="text-muted small">
-                      {blocks.filter((b) => !b.include).length} excluidos
-                    </div>
+              {blocks.length > 0 ? (
+                <div className="space-y-3 rounded-lg border border-border p-4">
+                  <div className="flex items-center justify-between">
+                    <p className="font-medium text-foreground">Orden para consolidado</p>
+                    <p className="text-xs text-muted-foreground">
+                      {blocks.filter((block) => !block.include).length} excluidos
+                    </p>
                   </div>
 
-                  <div className="list-group">
-                    {blocks.map((block, index) => (
-                      <div
-                        key={block.id}
-                        className="list-group-item d-flex align-items-center gap-2"
-                      >
-                        <span className="badge bg-primary">{index + 1}</span>
-                        <div className="flex-grow-1">
-                          <div className="fw-semibold">{block.name}</div>
-                          <div className="small text-muted">{block.sheet}</div>
-                        </div>
-                        <div className="form-check form-switch">
-                          <input
-                            className="form-check-input"
-                            type="checkbox"
-                            checked={block.include}
-                            onChange={() => handleToggleInclude(block.id)}
-                          />
-                          <label className="form-check-label small">
-                            Incluir
-                          </label>
-                        </div>
-                        <div className="btn-group" role="group">
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-secondary"
-                            onClick={() => handleMove(index, -1)}
-                            disabled={index === 0}
-                          >
-                            Subir
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-secondary"
-                            onClick={() => handleMove(index, 1)}
-                            disabled={index === blocks.length - 1}
-                          >
-                            Bajar
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <Table>
+                    <TableHeader>
+                      {table.getHeaderGroups().map((headerGroup) => (
+                        <TableRow key={headerGroup.id}>
+                          {headerGroup.headers.map((header) => (
+                            <TableHead key={header.id}>
+                              {header.isPlaceholder
+                                ? null
+                                : flexRender(header.column.columnDef.header, header.getContext())}
+                            </TableHead>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableHeader>
+                    <TableBody>
+                      {table.getRowModel().rows.map((row) => (
+                        <TableRow key={row.id}>
+                          {row.getVisibleCells().map((cell) => (
+                            <TableCell key={cell.id}>
+                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
-              )}
+              ) : null}
 
-              <button
-                className="btn btn-outline-primary"
-                type="submit"
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? "Generando..." : "Generar PDFs"}
-              </button>
+              <div className="mt-3 border-t border-border/60 pt-4">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                  <Button type="submit" disabled={isSubmitPending}>
+                    {isSubmitPending ? "Generando..." : "Generar PDFs"}
+                  </Button>
+                  {submitPdfMutation.isPending ? (
+                    <Button type="button" variant="destructive" onClick={handleCancel}>
+                      Cancelar
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
             </form>
 
-            <div className="mt-3">
+            <div className="mt-5 space-y-2">
               <StatusLine text={status} ok={statusOk} />
               <ProgressBar value={progress} />
             </div>
-          </div>
-        </div>
-      </div>
-    </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+    </section>
   );
 }
